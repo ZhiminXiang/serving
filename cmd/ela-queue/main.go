@@ -274,7 +274,6 @@ func setupAdminHandlers(server *http.Server) {
 		alive: true,
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", readinessHandler)
 	mux.HandleFunc(fmt.Sprintf("/%s", revision.RequestQueueHealthPath), h.healthHandler)
 	mux.HandleFunc(fmt.Sprintf("/%s", revision.RequestQueueQuitPath), h.quitHandler)
 	server.Handler = mux
@@ -316,6 +315,12 @@ func main() {
 		Addr: fmt.Sprintf(":%d", revision.RequestQueuePort), Handler: nil}
 	adminServer := &http.Server{
 		Addr: fmt.Sprintf(":%d", revision.RequestQueueAdminPort), Handler: nil}
+    readinessServer := &http.Server{
+    	Addr: ":8032", Handler: nil}
+    muxReadiness := http.NewServeMux()
+    muxReadiness.HandleFunc("/readiness", readinessHandler)
+    readinessServer.Handler = muxReadiness
+    go readinessServer.ListenAndServe()
 
 	// Add a SIGTERM handler to gracefully shutdown the servers during
 	// pod termination.
@@ -327,6 +332,7 @@ func main() {
 		// complete, while no new work is accepted.
 		server.Shutdown(context.Background())
 		adminServer.Shutdown(context.Background())
+		readinessServer.Shutdown(context.Background())
 		os.Exit(0)
 	}()
 	http.HandleFunc("/", handler)

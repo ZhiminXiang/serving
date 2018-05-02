@@ -118,7 +118,7 @@ func MakeElaPodSpec(
 	// TODO(tcnghia): Fail validation webhook when users specify their
 	// own port in readiness checks.
 	if hasHttpPath(elaContainer.ReadinessProbe) {
-		elaContainer.ReadinessProbe.Handler.HTTPGet.Port = intstr.FromInt(RequestQueueAdminPort)
+		elaContainer.ReadinessProbe.Handler.HTTPGet.Port = intstr.FromInt(8032)
 	}
 
 	fluentdContainer := corev1.Container{
