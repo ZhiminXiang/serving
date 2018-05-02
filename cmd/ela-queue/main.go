@@ -189,7 +189,7 @@ func readinessHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	glog.Infof("Starting readiness check.")
-	newReq, err := http.NewRequest("GET", fmt.Sprintf("http://%v:%d", podIp, revision.RequestQueuePort), nil)
+	newReq, err := http.NewRequest("GET", fmt.Sprintf("http://localhost:%d", revision.RequestQueuePort), nil)
 	if err != nil {
 		glog.Fatal(err)
 		w.WriteHeader(http.StatusBadRequest)
