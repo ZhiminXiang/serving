@@ -77,7 +77,7 @@ const (
 	RequestQueueHealthPath           = "health"
 
 	controllerAgentName = "revision-controller"
-	autoscalerPort = 8080
+	autoscalerPort = 443
 
 	serviceTimeoutDuration = 5 * time.Minute
 	sidecarIstioInjectAnnotation = "sidecar.istio.io/inject"

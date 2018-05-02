@@ -330,9 +330,9 @@ func TestCreateRevCreatesStuff(t *testing.T) {
 		if container.Name == elaContainerName {
 			foundElaContainer = true
 			// verify that the ReadinessProbe has our port.
-			if container.ReadinessProbe.Handler.HTTPGet.Port != intstr.FromInt(RequestQueuePort) {
+			if container.ReadinessProbe.Handler.HTTPGet.Port != intstr.FromInt(RequestQueueAdminPort) {
 				t.Errorf("Expect ReadinessProbe handler to have port %d, saw %v",
-					RequestQueuePort, container.ReadinessProbe.Handler.HTTPGet.Port)
+					RequestQueueAdminPort, container.ReadinessProbe.Handler.HTTPGet.Port)
 			}
 			if diff := cmp.Diff(expectedPreStop, container.Lifecycle.PreStop); diff != "" {
 				t.Errorf("Unexpected PreStop diff in container %q (-want +got): %v", container.Name, diff)

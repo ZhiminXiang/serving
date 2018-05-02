@@ -118,7 +118,7 @@ func MakeElaPodSpec(
 	// TODO(tcnghia): Fail validation webhook when users specify their
 	// own port in readiness checks.
 	if hasHttpPath(elaContainer.ReadinessProbe) {
-		elaContainer.ReadinessProbe.Handler.HTTPGet.Port = intstr.FromInt(RequestQueuePort)
+		elaContainer.ReadinessProbe.Handler.HTTPGet.Port = intstr.FromInt(RequestQueueAdminPort)
 	}
 
 	fluentdContainer := corev1.Container{
@@ -239,6 +239,14 @@ func MakeElaPodSpec(
 				ValueFrom: &corev1.EnvVarSource{
 					FieldRef: &corev1.ObjectFieldSelector{
 						FieldPath: "metadata.name",
+					},
+				},
+			},
+			{
+				Name:  "ELA_POD_IP",
+				ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{
+						FieldPath: "status.podIP",
 					},
 				},
 			},

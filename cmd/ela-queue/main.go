@@ -59,6 +59,7 @@ const (
 )
 
 var (
+	podIp                    string
 	podName                  string
 	elaRevision              string
 	elaAutoscaler            string
@@ -73,6 +74,12 @@ var (
 )
 
 func init() {
+	podIp = os.Getenv("ELA_POD_IP")
+	if podIp == "" {
+		glog.Infof("Pod IP is not ready.")
+	}
+	glog.Infof("ELA_POD_IP=%v", podIp)
+
 	podName = os.Getenv("ELA_POD")
 	if podName == "" {
 		glog.Fatal("No ELA_POD provided.")
@@ -172,6 +179,41 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
+func readinessHandler(w http.ResponseWriter, r *http.Request) {
+	if podIp == "" {
+		podIp = os.Getenv("ELA_POD_IP")
+		if podIp == "" {
+			glog.Infof("Pod IP is not ready.")
+			w.WriteHeader(http.StatusBadRequest)
+		    return
+		}
+	}
+	glog.Infof("Starting readiness check.")
+	newReq, err := http.NewRequest("GET", fmt.Sprintf("http://%v:%d", podIp, revision.RequestQueuePort), nil)
+	if err != nil {
+		glog.Fatal(err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	newReq.Header = r.Header
+	newReq.Close = true
+	if !isProbe(newReq) {
+		glog.Fatal("Request for readiness check MUST be probe request.")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	glog.Infof("Before sending request.")
+	h := http.Client{}
+	resp, err := h.Do(newReq)
+	if err != nil || resp.StatusCode != 200 {
+		glog.Fatal(err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	glog.Infof("Healthy!!!!!!!!!!!!")
+	w.WriteHeader(http.StatusOK)
+}
+
 // healthServer registers whether a PreStop hook has been called.
 type healthServer struct {
 	alive bool
@@ -232,6 +274,7 @@ func setupAdminHandlers(server *http.Server) {
 		alive: true,
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", readinessHandler)
 	mux.HandleFunc(fmt.Sprintf("/%s", revision.RequestQueueHealthPath), h.healthHandler)
 	mux.HandleFunc(fmt.Sprintf("/%s", revision.RequestQueueQuitPath), h.quitHandler)
 	server.Handler = mux
