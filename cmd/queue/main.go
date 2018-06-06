@@ -151,6 +151,7 @@ func isProbe(r *http.Request) bool {
 func handler(w http.ResponseWriter, r *http.Request) {
 	if isProbe(r) {
 		// Do not count health checks for concurrency metrics
+		logger.Infof("Healthy check request %s", r)
 		proxy.ServeHTTP(w, r)
 		return
 	}
