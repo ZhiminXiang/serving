@@ -26,7 +26,6 @@ package route
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +40,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/josephburnett/k8sflag/pkg/k8sflag"
-	"github.com/knative/serving/pkg/apis/istio/v1alpha2"
+	"github.com/knative/serving/pkg/apis/istio/v1alpha3"
 	"github.com/knative/serving/pkg/apis/serving"
 	"github.com/knative/serving/pkg/apis/serving/v1alpha1"
 	fakeclientset "github.com/knative/serving/pkg/client/clientset/versioned/fake"
@@ -135,7 +134,7 @@ func getTestConfiguration() *v1alpha1.Configuration {
 }
 
 func getTestRevisionForConfig(config *v1alpha1.Configuration) *v1alpha1.Revision {
-	return &v1alpha1.Revision{
+	rev := &v1alpha1.Revision{
 		ObjectMeta: metav1.ObjectMeta{
 			SelfLink:  "/apis/serving/v1alpha1/namespaces/test/revisions/p-deadbeef",
 			Name:      "p-deadbeef",
@@ -149,13 +148,18 @@ func getTestRevisionForConfig(config *v1alpha1.Configuration) *v1alpha1.Revision
 			ServiceName: "p-deadbeef-service",
 		},
 	}
+	rev.Status.MarkResourcesAvailable()
+	rev.Status.MarkContainerHealthy()
+	return rev
 }
 
-func getActivatorDestinationWeight(w int) v1alpha2.DestinationWeight {
-	return v1alpha2.DestinationWeight{
-		Destination: v1alpha2.IstioService{
-			Name:      ctrl.GetElaK8SActivatorServiceName(),
-			Namespace: pkg.GetServingSystemNamespace(),
+func getActivatorDestinationWeight(w int) v1alpha3.DestinationWeight {
+	return v1alpha3.DestinationWeight{
+		Destination: v1alpha3.Destination{
+			Host: fmt.Sprintf("%s.%s.svc.cluster.local", ctrl.GetElaK8SActivatorServiceName(), pkg.GetServingSystemNamespace()),
+			Port: v1alpha3.PortSelector{
+				Number: 80,
+			},
 		},
 		Weight: w,
 	}
@@ -241,8 +245,8 @@ func TestCreateRouteCreatesStuff(t *testing.T) {
 	// Look for the events. Events are delivered asynchronously so we need to use
 	// hooks here. Each hook tests for a specific event.
 	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created service "test-route-service"`))
-	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created Ingress "test-route-ingress"`))
-	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created Istio route rule "test-route-istio"`))
+	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created Gateway "test-route-gateway"`))
+	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created VirtualService "test-route-istio"`))
 	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Updated status for route "test-route"`))
 
 	// A standalone revision
@@ -278,31 +282,31 @@ func TestCreateRouteCreatesStuff(t *testing.T) {
 		t.Errorf("Unexpected service ports diff (-want +got): %v", diff)
 	}
 
-	// Look for the ingress.
-	expectedIngressName := fmt.Sprintf("%s-ingress", route.Name)
-	ingress, err := kubeClient.ExtensionsV1beta1().Ingresses(testNamespace).Get(expectedIngressName, metav1.GetOptions{})
+	// Look for the gateway.
+	expectedGatewayName := fmt.Sprintf("%s-gateway", route.Name)
+	gateway, err := elaClient.NetworkingV1alpha3().Gateways(testNamespace).Get(expectedGatewayName, metav1.GetOptions{})
 	if err != nil {
-		t.Errorf("error getting ingress: %v", err)
+		t.Errorf("error getting gateway: %v", err)
 	}
 
 	expectedDomainPrefix := fmt.Sprintf("%s.%s.", route.Name, route.Namespace)
 	expectedWildcardDomainPrefix := fmt.Sprintf("*.%s", expectedDomainPrefix)
-	if !strings.HasPrefix(ingress.Spec.Rules[0].Host, expectedDomainPrefix) {
-		t.Errorf("Ingress host %q does not have prefix %q", ingress.Spec.Rules[0].Host, expectedDomainPrefix)
+	if !strings.HasPrefix(gateway.Spec.Servers[0].Hosts[1], expectedDomainPrefix) {
+		t.Errorf("Gateway host %q does not have prefix %q", gateway.Spec.Servers[0].Hosts[0], expectedDomainPrefix)
 	}
-	if !strings.HasPrefix(ingress.Spec.Rules[1].Host, expectedWildcardDomainPrefix) {
-		t.Errorf("Ingress host %q does not have prefix %q", ingress.Spec.Rules[1].Host, expectedWildcardDomainPrefix)
+	if !strings.HasPrefix(gateway.Spec.Servers[0].Hosts[0], expectedWildcardDomainPrefix) {
+		t.Errorf("Gateway host %q does not have prefix %q", gateway.Spec.Servers[0].Hosts[1], expectedWildcardDomainPrefix)
 	}
 
-	// Look for the route rule.
-	routerule, err := elaClient.ConfigV1alpha2().RouteRules(testNamespace).Get(fmt.Sprintf("%s-istio", route.Name), metav1.GetOptions{})
+	// Look for the virtual service.
+	vs, err := elaClient.NetworkingV1alpha3().VirtualServices(testNamespace).Get(ctrl.GetVirtualServiceName(route), metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("error getting routerule: %v", err)
+		t.Fatalf("error getting VirtualService: %v", err)
 	}
 
 	// Check labels
 	expectedLabels := map[string]string{"route": route.Name}
-	if diff := cmp.Diff(expectedLabels, routerule.Labels); diff != "" {
+	if diff := cmp.Diff(expectedLabels, vs.Labels); diff != "" {
 		t.Errorf("Unexpected label diff (-want +got): %v", diff)
 	}
 
@@ -313,39 +317,43 @@ func TestCreateRouteCreatesStuff(t *testing.T) {
 		Name:       route.Name,
 	}}
 
-	if diff := cmp.Diff(expectedRefs, routerule.OwnerReferences, cmpopts.IgnoreFields(expectedRefs[0], "Controller", "BlockOwnerDeletion")); diff != "" {
+	if diff := cmp.Diff(expectedRefs, vs.OwnerReferences, cmpopts.IgnoreFields(expectedRefs[0], "Controller", "BlockOwnerDeletion")); diff != "" {
 		t.Errorf("Unexpected rule owner refs diff (-want +got): %v", diff)
 	}
-
-	expectedRouteSpec := v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      "test-route-service",
-			Namespace: testNamespace,
+	domain := strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, ".")
+	clusterDomain := "test-route-service.test.svc.cluster.local"
+	expectedSpec := v1alpha3.VirtualServiceSpec{
+		// We want to connect to two Gateways: the Route's ingress Gateway, and the 'mesh' Gateway.  The former
+		// provides access from outside of the cluster, and the latter provides access for services from inside
+		// the cluster.
+		Gateways: []string{
+			"test-route-gateway",
+			"mesh",
 		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(
-							strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, "."),
-						),
-					},
+		Hosts: []string{
+			"*." + domain,
+			domain,
+			clusterDomain,
+		},
+		Http: []v1alpha3.HTTPRoute{{
+			Match: []v1alpha3.HTTPMatchRequest{{
+				Authority: &v1alpha3.StringMatch{Exact: domain},
+			}, {
+				Authority: &v1alpha3.StringMatch{Exact: clusterDomain},
+			}},
+			Route: []v1alpha3.DestinationWeight{{
+				Destination: v1alpha3.Destination{
+					Host: "test-rev-service.test.svc.cluster.local",
+					Port: v1alpha3.PortSelector{Number: 80},
 				},
-			},
-		},
-		Route: []v1alpha2.DestinationWeight{{
-			Destination: v1alpha2.IstioService{
-				Name:      "test-rev-service",
-				Namespace: testNamespace,
-			},
-			Weight: 100,
-		}, getActivatorDestinationWeight(0)},
+				Weight: 100,
+			}},
+		}},
 	}
 
-	if diff := cmp.Diff(expectedRouteSpec, routerule.Spec); diff != "" {
+	if diff := cmp.Diff(expectedSpec, vs.Spec); diff != "" {
 		t.Errorf("Unexpected rule spec diff (-want +got): %s", diff)
 	}
-
 	if err := h.WaitForHooks(time.Second * 3); err != nil {
 		t.Error(err)
 	}
@@ -360,8 +368,8 @@ func TestCreateRouteForOneReserveRevision(t *testing.T) {
 	// Look for the events. Events are delivered asynchronously so we need to use
 	// hooks here. Each hook tests for a specific event.
 	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created service "test-route-service"`))
-	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created Ingress "test-route-ingress"`))
-	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created Istio route rule "test-route-istio"`))
+	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created Gateway "test-route-gateway"`))
+	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Created VirtualService "test-route-istio"`))
 	h.OnCreate(&kubeClient.Fake, "events", ExpectNormalEventDelivery(t, `Updated status for route "test-route"`))
 
 	// An inactive revision
@@ -387,14 +395,14 @@ func TestCreateRouteForOneReserveRevision(t *testing.T) {
 	controller.updateRouteEvent(KeyOrDie(route))
 
 	// Look for the route rule with activator as the destination.
-	routerule, err := elaClient.ConfigV1alpha2().RouteRules(testNamespace).Get(fmt.Sprintf("%s-istio", route.Name), metav1.GetOptions{})
+	vs, err := elaClient.NetworkingV1alpha3().VirtualServices(testNamespace).Get(ctrl.GetVirtualServiceName(route), metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("error getting routerule: %v", err)
+		t.Fatalf("error getting VirtualService: %v", err)
 	}
 
 	// Check labels
 	expectedLabels := map[string]string{"route": route.Name}
-	if diff := cmp.Diff(expectedLabels, routerule.Labels); diff != "" {
+	if diff := cmp.Diff(expectedLabels, vs.Labels); diff != "" {
 		t.Errorf("Unexpected label diff (-want +got): %v", diff)
 	}
 
@@ -405,122 +413,43 @@ func TestCreateRouteForOneReserveRevision(t *testing.T) {
 		Name:       route.Name,
 	}}
 
-	if diff := cmp.Diff(expectedRefs, routerule.OwnerReferences, cmpopts.IgnoreFields(expectedRefs[0], "Controller", "BlockOwnerDeletion")); diff != "" {
+	if diff := cmp.Diff(expectedRefs, vs.OwnerReferences, cmpopts.IgnoreFields(expectedRefs[0], "Controller", "BlockOwnerDeletion")); diff != "" {
 		t.Errorf("Unexpected rule owner refs diff (-want +got): %v", diff)
 	}
-
-	appendHeaders := make(map[string]string)
-	appendHeaders[ctrl.GetRevisionHeaderName()] = "test-rev"
-	appendHeaders[ctrl.GetRevisionHeaderNamespace()] = testNamespace
-	expectedRouteSpec := v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      "test-route-service",
-			Namespace: testNamespace,
+	domain := strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, ".")
+	clusterDomain := "test-route-service.test.svc.cluster.local"
+	expectedSpec := v1alpha3.VirtualServiceSpec{
+		// We want to connect to two Gateways: the Route's ingress Gateway, and the 'mesh' Gateway.  The former
+		// provides access from outside of the cluster, and the latter provides access for services from inside
+		// the cluster.
+		Gateways: []string{
+			"test-route-gateway",
+			"mesh",
 		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(
-							strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, "."),
-						),
-					},
-				},
+		Hosts: []string{
+			"*." + domain,
+			domain,
+			clusterDomain,
+		},
+		Http: []v1alpha3.HTTPRoute{{
+			Match: []v1alpha3.HTTPMatchRequest{{
+				Authority: &v1alpha3.StringMatch{Exact: domain},
+			}, {
+				Authority: &v1alpha3.StringMatch{Exact: clusterDomain},
+			}},
+			Route: []v1alpha3.DestinationWeight{getActivatorDestinationWeight(100)},
+			AppendHeaders: map[string]string{
+				ctrl.GetRevisionHeaderName():      "test-rev",
+				ctrl.GetRevisionHeaderNamespace(): testNamespace,
 			},
-		},
-		Route:         []v1alpha2.DestinationWeight{getActivatorDestinationWeight(100)},
-		AppendHeaders: appendHeaders,
+		}},
 	}
-
-	if diff := cmp.Diff(expectedRouteSpec, routerule.Spec); diff != "" {
+	if diff := cmp.Diff(expectedSpec, vs.Spec); diff != "" {
 		t.Errorf("Unexpected rule spec diff (-want +got): %s", diff)
 	}
 
 	if err := h.WaitForHooks(time.Second * 3); err != nil {
 		t.Error(err)
-	}
-}
-
-func TestCreateRouteFromConfigsWithMultipleRevs(t *testing.T) {
-	_, elaClient, controller, _, elaInformer, _ := newTestController(t)
-
-	// A configuration and associated revision. Normally the revision would be
-	// created by the configuration controller.
-	config := getTestConfiguration()
-	latestReadyRev := getTestRevisionForConfig(config)
-	otherRev := &v1alpha1.Revision{
-		ObjectMeta: metav1.ObjectMeta{
-			SelfLink:  "/apis/serving/v1alpha1/namespaces/test/revisions/p-livebeef",
-			Name:      "p-livebeef",
-			Namespace: testNamespace,
-			Labels: map[string]string{
-				serving.ConfigurationLabelKey: config.Name,
-			},
-		},
-		Spec: *config.Spec.RevisionTemplate.Spec.DeepCopy(),
-		Status: v1alpha1.RevisionStatus{
-			ServiceName: "p-livebeef-service",
-		},
-	}
-	config.Status.LatestReadyRevisionName = latestReadyRev.Name
-	elaClient.ServingV1alpha1().Configurations(testNamespace).Create(config)
-	// Since updateRouteEvent looks in the lister, we need to add it to the informer
-	elaInformer.Serving().V1alpha1().Configurations().Informer().GetIndexer().Add(config)
-	elaClient.ServingV1alpha1().Revisions(testNamespace).Create(latestReadyRev)
-	elaClient.ServingV1alpha1().Revisions(testNamespace).Create(otherRev)
-
-	// A route targeting both the config and standalone revision
-	route := getTestRouteWithTrafficTargets(
-		[]v1alpha1.TrafficTarget{{
-			ConfigurationName: config.Name,
-			Percent:           100,
-		}},
-	)
-	elaClient.ServingV1alpha1().Routes(testNamespace).Create(route)
-	// Since updateRouteEvent looks in the lister, we need to add it to the informer
-	elaInformer.Serving().V1alpha1().Routes().Informer().GetIndexer().Add(route)
-
-	controller.updateRouteEvent(KeyOrDie(route))
-
-	routerule, err := elaClient.ConfigV1alpha2().RouteRules(testNamespace).Get(fmt.Sprintf("%s-istio", route.Name), metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("error getting routerule: %v", err)
-	}
-
-	expectedRouteSpec := v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      fmt.Sprintf("%s-service", route.Name),
-			Namespace: testNamespace,
-		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(
-							strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, "."),
-						),
-					},
-				},
-			},
-		},
-		Route: []v1alpha2.DestinationWeight{{
-			Destination: v1alpha2.IstioService{
-				Name:      fmt.Sprintf("%s-service", latestReadyRev.Name),
-				Namespace: testNamespace,
-			},
-			Weight: 100,
-		}, getActivatorDestinationWeight(0),
-			{
-				Destination: v1alpha2.IstioService{
-					Name:      fmt.Sprintf("%s-service", otherRev.Name),
-					Namespace: testNamespace,
-				},
-				Weight: 0,
-			}},
-	}
-
-	if diff := cmp.Diff(expectedRouteSpec, routerule.Spec); diff != "" {
-		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
 	}
 }
 
@@ -556,46 +485,50 @@ func TestCreateRouteWithMultipleTargets(t *testing.T) {
 
 	controller.updateRouteEvent(KeyOrDie(route))
 
-	routerule, err := elaClient.ConfigV1alpha2().RouteRules(testNamespace).Get(fmt.Sprintf("%s-istio", route.Name), metav1.GetOptions{})
+	vs, err := elaClient.NetworkingV1alpha3().VirtualServices(testNamespace).Get(ctrl.GetVirtualServiceName(route), metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("error getting routerule: %v", err)
+		t.Fatalf("error getting VirtualService: %v", err)
 	}
 
-	expectedRouteSpec := v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      fmt.Sprintf("%s-service", route.Name),
-			Namespace: testNamespace,
+	domain := strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, ".")
+	clusterDomain := "test-route-service.test.svc.cluster.local"
+	expectedSpec := v1alpha3.VirtualServiceSpec{
+		// We want to connect to two Gateways: the Route's ingress Gateway, and the 'mesh' Gateway.  The former
+		// provides access from outside of the cluster, and the latter provides access for services from inside
+		// the cluster.
+		Gateways: []string{
+			"test-route-gateway",
+			"mesh",
 		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(
-							strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, "."),
-						),
-					},
+		Hosts: []string{
+			"*." + domain,
+			domain,
+			clusterDomain,
+		},
+		Http: []v1alpha3.HTTPRoute{{
+			Match: []v1alpha3.HTTPMatchRequest{{
+				Authority: &v1alpha3.StringMatch{Exact: domain},
+			}, {
+				Authority: &v1alpha3.StringMatch{Exact: clusterDomain},
+			}},
+			Route: []v1alpha3.DestinationWeight{{
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s-service.test.svc.cluster.local", cfgrev.Name),
+					Port: v1alpha3.PortSelector{Number: 80},
 				},
-			},
-		},
-		Route: []v1alpha2.DestinationWeight{{
-			Destination: v1alpha2.IstioService{
-				Name:      fmt.Sprintf("%s-service", cfgrev.Name),
-				Namespace: testNamespace,
-			},
-			Weight: 90,
-		}, {
-			Destination: v1alpha2.IstioService{
-				Name:      fmt.Sprintf("%s-service", rev.Name),
-				Namespace: testNamespace,
-			},
-			Weight: 10,
-		}, getActivatorDestinationWeight(0)},
+				Weight: 90,
+			}, {
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s-service.test.svc.cluster.local", rev.Name),
+					Port: v1alpha3.PortSelector{Number: 80},
+				},
+				Weight: 10,
+			}},
+		}},
 	}
-
-	if diff := cmp.Diff(expectedRouteSpec, routerule.Spec); diff != "" {
+	if diff := cmp.Diff(expectedSpec, vs.Spec); diff != "" {
 		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
 	}
-
 }
 
 // Test one out of multiple target revisions is in Reserve serving state.
@@ -638,41 +571,48 @@ func TestCreateRouteWithOneTargetReserve(t *testing.T) {
 
 	controller.updateRouteEvent(KeyOrDie(route))
 
-	routerule, err := elaClient.ConfigV1alpha2().RouteRules(testNamespace).Get(fmt.Sprintf("%s-istio", route.Name), metav1.GetOptions{})
+	vs, err := elaClient.NetworkingV1alpha3().VirtualServices(testNamespace).Get(ctrl.GetVirtualServiceName(route), metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("error getting routerule: %v", err)
+		t.Fatalf("error getting VirtualService: %v", err)
 	}
 
-	appendHeaders := make(map[string]string)
-	appendHeaders[ctrl.GetRevisionHeaderName()] = "test-rev"
-	appendHeaders[ctrl.GetRevisionHeaderNamespace()] = testNamespace
-	expectedRouteSpec := v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      fmt.Sprintf("%s-service", route.Name),
-			Namespace: testNamespace,
+	domain := strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, ".")
+	clusterDomain := "test-route-service.test.svc.cluster.local"
+	expectedSpec := v1alpha3.VirtualServiceSpec{
+		// We want to connect to two Gateways: the Route's ingress Gateway, and the 'mesh' Gateway.  The former
+		// provides access from outside of the cluster, and the latter provides access for services from inside
+		// the cluster.
+		Gateways: []string{
+			"test-route-gateway",
+			"mesh",
 		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(
-							strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, "."),
-						),
+		Hosts: []string{
+			"*." + domain,
+			domain,
+			clusterDomain,
+		},
+		Http: []v1alpha3.HTTPRoute{{
+			Match: []v1alpha3.HTTPMatchRequest{{
+				Authority: &v1alpha3.StringMatch{Exact: domain},
+			}, {
+				Authority: &v1alpha3.StringMatch{Exact: clusterDomain},
+			}},
+			Route: []v1alpha3.DestinationWeight{
+				{
+					Destination: v1alpha3.Destination{
+						Host: fmt.Sprintf("%s-service.%s.svc.cluster.local", cfgrev.Name, testNamespace),
+						Port: v1alpha3.PortSelector{Number: 80},
 					},
+					Weight: 90,
 				},
+				getActivatorDestinationWeight(10)},
+			AppendHeaders: map[string]string{
+				ctrl.GetRevisionHeaderName():      "test-rev",
+				ctrl.GetRevisionHeaderNamespace(): testNamespace,
 			},
-		},
-		Route: []v1alpha2.DestinationWeight{{
-			Destination: v1alpha2.IstioService{
-				Name:      fmt.Sprintf("%s-service", cfgrev.Name),
-				Namespace: testNamespace,
-			},
-			Weight: 90,
-		}, getActivatorDestinationWeight(10)},
-		AppendHeaders: appendHeaders,
+		}},
 	}
-
-	if diff := cmp.Diff(expectedRouteSpec, routerule.Spec); diff != "" {
+	if diff := cmp.Diff(expectedSpec, vs.Spec); diff != "" {
 		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
 	}
 
@@ -729,56 +669,67 @@ func TestCreateRouteWithDuplicateTargets(t *testing.T) {
 
 	controller.updateRouteEvent(KeyOrDie(route))
 
-	routerule, err := elaClient.ConfigV1alpha2().RouteRules(testNamespace).Get(fmt.Sprintf("%s-istio", route.Name), metav1.GetOptions{})
+	vs, err := elaClient.NetworkingV1alpha3().VirtualServices(testNamespace).Get(ctrl.GetVirtualServiceName(route), metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("error getting routerule: %v", err)
+		t.Fatalf("error getting VirtualService: %v", err)
 	}
 
-	expectedRouteSpec := v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      "test-route-service",
-			Namespace: testNamespace,
+	domain := strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, ".")
+	clusterDomain := "test-route-service.test.svc.cluster.local"
+	expectedSpec := v1alpha3.VirtualServiceSpec{
+		// We want to connect to two Gateways: the Route's ingress Gateway, and the 'mesh' Gateway.  The former
+		// provides access from outside of the cluster, and the latter provides access for services from inside
+		// the cluster.
+		Gateways: []string{
+			"test-route-gateway",
+			"mesh",
 		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(
-							strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, "."),
-						),
-					},
+		Hosts: []string{
+			"*." + domain,
+			domain,
+			clusterDomain,
+		},
+		Http: []v1alpha3.HTTPRoute{{
+			Match: []v1alpha3.HTTPMatchRequest{{
+				Authority: &v1alpha3.StringMatch{Exact: domain},
+			}, {
+				Authority: &v1alpha3.StringMatch{Exact: clusterDomain},
+			}},
+			Route: []v1alpha3.DestinationWeight{{
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s.%s.svc.cluster.local", "p-deadbeef-service", testNamespace),
+					Port: v1alpha3.PortSelector{Number: 80},
 				},
-			},
-		},
-		Route: []v1alpha2.DestinationWeight{{
-			Destination: v1alpha2.IstioService{
-				Name:      "p-deadbeef-service",
-				Namespace: testNamespace,
-			},
-			Weight: 50,
+				Weight: 50,
+			}, {
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s.%s.svc.cluster.local", "test-rev-service", testNamespace),
+					Port: v1alpha3.PortSelector{Number: 80},
+				},
+				Weight: 50,
+			}},
 		}, {
-			Destination: v1alpha2.IstioService{
-				Name:      "test-rev-service",
-				Namespace: testNamespace,
-			},
-			Weight: 15,
+			Match: []v1alpha3.HTTPMatchRequest{{Authority: &v1alpha3.StringMatch{Exact: "test-revision-1." + domain}}},
+			Route: []v1alpha3.DestinationWeight{{
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s.%s.svc.cluster.local", "test-rev-service", testNamespace),
+					Port: v1alpha3.PortSelector{Number: 80},
+				},
+				Weight: 100,
+			}},
 		}, {
-			Destination: v1alpha2.IstioService{
-				Name:      "test-rev-service",
-				Namespace: testNamespace,
-			},
-			Weight: 20,
-		}, {
-			Destination: v1alpha2.IstioService{
-				Name:      "test-rev-service",
-				Namespace: testNamespace,
-			},
-			Weight: 15,
-		},
-			getActivatorDestinationWeight(0)},
+			Match: []v1alpha3.HTTPMatchRequest{{Authority: &v1alpha3.StringMatch{Exact: "test-revision-2." + domain}}},
+			Route: []v1alpha3.DestinationWeight{{
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s.%s.svc.cluster.local", "test-rev-service", testNamespace),
+					Port: v1alpha3.PortSelector{Number: 80},
+				},
+				Weight: 100,
+			}},
+		}},
 	}
-
-	if diff := cmp.Diff(expectedRouteSpec, routerule.Spec); diff != "" {
+	if diff := cmp.Diff(expectedSpec, vs.Spec); diff != "" {
+		fmt.Printf("%+v\n", vs.Spec)
 		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
 	}
 }
@@ -819,167 +770,67 @@ func TestCreateRouteWithNamedTargets(t *testing.T) {
 
 	controller.updateRouteEvent(KeyOrDie(route))
 
-	domain := fmt.Sprintf("%s.%s.%s", route.Name, route.Namespace, defaultDomainSuffix)
-
-	expectRouteSpec := func(t *testing.T, name string, expectedSpec v1alpha2.RouteRuleSpec) {
-		routerule, err := elaClient.ConfigV1alpha2().RouteRules(testNamespace).Get(name, metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("error getting routerule: %v", err)
-		}
-		if diff := cmp.Diff(expectedSpec, routerule.Spec); diff != "" {
-			t.Errorf("Unexpected routerule spec diff (-want +got): %v", diff)
-		}
+	vs, err := elaClient.NetworkingV1alpha3().VirtualServices(testNamespace).Get(ctrl.GetVirtualServiceName(route), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("error getting routerule: %v", err)
 	}
-
-	// Expects authority header to be the domain suffix
-	expectRouteSpec(t, "test-route-istio", v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      "test-route-service",
-			Namespace: testNamespace,
+	domain := strings.Join([]string{route.Name, route.Namespace, defaultDomainSuffix}, ".")
+	clusterDomain := "test-route-service.test.svc.cluster.local"
+	expectedSpec := v1alpha3.VirtualServiceSpec{
+		// We want to connect to two Gateways: the Route's ingress Gateway, and the 'mesh' Gateway.  The former
+		// provides access from outside of the cluster, and the latter provides access for services from inside
+		// the cluster.
+		Gateways: []string{
+			"test-route-gateway",
+			"mesh",
 		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(domain),
-					},
+		Hosts: []string{
+			"*." + domain,
+			domain,
+			clusterDomain,
+		},
+		Http: []v1alpha3.HTTPRoute{{
+			Match: []v1alpha3.HTTPMatchRequest{{
+				Authority: &v1alpha3.StringMatch{Exact: domain},
+			}, {
+				Authority: &v1alpha3.StringMatch{Exact: clusterDomain},
+			}},
+			Route: []v1alpha3.DestinationWeight{{
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s.%s.svc.cluster.local", "test-rev-service", testNamespace),
+					Port: v1alpha3.PortSelector{Number: 80},
 				},
-			},
-		},
-		Route: []v1alpha2.DestinationWeight{{
-			Destination: v1alpha2.IstioService{
-				Name:      "test-rev-service",
-				Namespace: testNamespace,
-			},
-			Weight: 50,
+				Weight: 50,
+			}, {
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s.%s.svc.cluster.local", "p-deadbeef-service", testNamespace),
+					Port: v1alpha3.PortSelector{Number: 80},
+				},
+				Weight: 50,
+			}},
 		}, {
-			Destination: v1alpha2.IstioService{
-				Name:      "p-deadbeef-service",
-				Namespace: testNamespace,
-			},
-			Weight: 50,
-		}, getActivatorDestinationWeight(0)},
-	})
-
-	// Expects authority header to have the traffic target name prefixed to the
-	// domain suffix. Also weights 100% of the traffic to the specified traffic
-	// target's revision.
-	expectRouteSpec(t, "test-route-foo-istio", v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      "test-route-service",
-			Namespace: testNamespace,
-		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(
-							strings.Join([]string{"foo", domain}, "."),
-						),
-					},
+			Match: []v1alpha3.HTTPMatchRequest{{Authority: &v1alpha3.StringMatch{Exact: "bar." + domain}}},
+			Route: []v1alpha3.DestinationWeight{{
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s.%s.svc.cluster.local", "p-deadbeef-service", testNamespace),
+					Port: v1alpha3.PortSelector{Number: 80},
 				},
-			},
-		},
-		Route: []v1alpha2.DestinationWeight{{
-			Destination: v1alpha2.IstioService{
-				Name:      "test-rev-service",
-				Namespace: testNamespace,
-			},
-			Weight: 100,
-		}},
-	})
-
-	// Expects authority header to have the traffic target name prefixed to the
-	// domain suffix. Also weights 100% of the traffic to the specified traffic
-	// target's revision.
-	expectRouteSpec(t, "test-route-bar-istio", v1alpha2.RouteRuleSpec{
-		Destination: v1alpha2.IstioService{
-			Name:      "test-route-service",
-			Namespace: testNamespace,
-		},
-		Match: v1alpha2.Match{
-			Request: v1alpha2.MatchRequest{
-				Headers: v1alpha2.Headers{
-					Authority: v1alpha2.MatchString{
-						Regex: regexp.QuoteMeta(
-							strings.Join([]string{"bar", domain}, "."),
-						),
-					},
-				},
-			},
-		},
-		Route: []v1alpha2.DestinationWeight{{
-			Destination: v1alpha2.IstioService{
-				Name:      "p-deadbeef-service",
-				Namespace: testNamespace,
-			},
-			Weight: 100,
-		}},
-	})
-}
-
-func TestCreateRouteDeletesOutdatedRouteRules(t *testing.T) {
-	_, elaClient, controller, _, _, _ := newTestController(t)
-	config := getTestConfiguration()
-	rev := getTestRevisionForConfig(config)
-	route := getTestRouteWithTrafficTargets(
-		[]v1alpha1.TrafficTarget{{
-			ConfigurationName: config.Name,
-			Percent:           50,
+				Weight: 100,
+			}},
 		}, {
-			ConfigurationName: config.Name,
-			Percent:           100,
-			Name:              "foo",
+			Match: []v1alpha3.HTTPMatchRequest{{Authority: &v1alpha3.StringMatch{Exact: "foo." + domain}}},
+			Route: []v1alpha3.DestinationWeight{{
+				Destination: v1alpha3.Destination{
+					Host: fmt.Sprintf("%s.%s.svc.cluster.local", "test-rev-service", testNamespace),
+					Port: v1alpha3.PortSelector{Number: 80},
+				},
+				Weight: 100,
+			}},
 		}},
-	)
-	extraRouteRule := &v1alpha2.RouteRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-route-extra-istio",
-			Namespace: route.Namespace,
-			Labels: map[string]string{
-				"route": route.Name,
-			},
-		},
 	}
-
-	// A route rule without the expected ela route label.
-	independentRouteRule := &v1alpha2.RouteRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-route-independent-istio",
-			Namespace: route.Namespace,
-		},
-	}
-
-	config.Status.LatestCreatedRevisionName = rev.Name
-	config.Labels = map[string]string{serving.RouteLabelKey: route.Name}
-
-	elaClient.ServingV1alpha1().Configurations("test").Create(config)
-	elaClient.ServingV1alpha1().Revisions("test").Create(rev)
-	elaClient.ConfigV1alpha2().RouteRules(route.Namespace).Create(extraRouteRule)
-	elaClient.ConfigV1alpha2().RouteRules(route.Namespace).Create(independentRouteRule)
-
-	// Ensure extraRouteRule was created
-	if _, err := elaClient.ConfigV1alpha2().RouteRules(route.Namespace).Get(extraRouteRule.Name, metav1.GetOptions{}); err != nil {
-		t.Errorf("Unexpected error occured. Expected route rule %s to exist.", extraRouteRule.Name)
-	}
-	if _, err := elaClient.ConfigV1alpha2().RouteRules(route.Namespace).Get(independentRouteRule.Name, metav1.GetOptions{}); err != nil {
-		t.Errorf("Unexpected error occured. Expected route rule %s to exist.", independentRouteRule.Name)
-	}
-	elaClient.ServingV1alpha1().Routes("test").Create(route)
-
-	if err := controller.removeOutdatedRouteRules(testCtx, route); err != nil {
-		t.Errorf("Unexpected error occurred removing outdated route rules: %s", err)
-	}
-
-	expectedErrMsg := fmt.Sprintf("routerules.config.istio.io \"%s\" not found", extraRouteRule.Name)
-	// expect extraRouteRule to have been deleted
-	_, err := elaClient.ConfigV1alpha2().RouteRules(route.Namespace).Get(extraRouteRule.Name, metav1.GetOptions{})
-	if wanted, got := expectedErrMsg, err.Error(); wanted != got {
-		t.Errorf("Unexpected error: %q expected: %q", got, wanted)
-	}
-	// expect independentRouteRule not to have been deleted
-	if _, err := elaClient.ConfigV1alpha2().RouteRules(route.Namespace).Get(independentRouteRule.Name, metav1.GetOptions{}); err != nil {
-		t.Errorf("Error occurred fetching route rule: %s. Expected route rule to exist.", independentRouteRule.Name)
+	if diff := cmp.Diff(expectedSpec, vs.Spec); diff != "" {
+		fmt.Printf("%+v\n", vs.Spec)
+		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
 	}
 }
 
@@ -1332,14 +1183,13 @@ func TestDeleteLabelOfConfigurationAndRevisionWhenUnconfigured(t *testing.T) {
 	if diff := cmp.Diff(expectedLabels, rev.Labels); diff != "" {
 		t.Errorf("Unexpected label in revision diff (-want +got): %v", diff)
 	}
-
 }
 
 func TestUpdateRouteDomainWhenRouteLabelChanges(t *testing.T) {
-	kubeClient, elaClient, controller, _, elaInformer, _ := newTestController(t)
+	_, elaClient, controller, _, elaInformer, _ := newTestController(t)
 	route := getTestRouteWithTrafficTargets([]v1alpha1.TrafficTarget{})
 	routeClient := elaClient.ServingV1alpha1().Routes(route.Namespace)
-	ingressClient := kubeClient.ExtensionsV1beta1().Ingresses(route.Namespace)
+	gatewayClient := elaClient.NetworkingV1alpha3().Gateways(route.Namespace)
 
 	// Create a route.
 	elaInformer.Serving().V1alpha1().Routes().Informer().GetIndexer().Add(route)
@@ -1370,16 +1220,16 @@ func TestUpdateRouteDomainWhenRouteLabelChanges(t *testing.T) {
 			t.Errorf("For labels %v, expected domain %q but saw %q", expectation.labels, expectedDomain, route.Status.Domain)
 		}
 
-		// Confirms that the ingress is updated in tandem with the route.
-		ingress, _ := ingressClient.Get(ctrl.GetElaK8SIngressName(route), metav1.GetOptions{})
+		// Confirms that the gateway is updated in tandem with the route.
+		gateway, _ := gatewayClient.Get(ctrl.GetElaK8SGatewayName(route), metav1.GetOptions{})
 
 		expectedHost := route.Status.Domain
 		expectedWildcardHost := fmt.Sprintf("*.%s", route.Status.Domain)
-		if ingress.Spec.Rules[0].Host != expectedHost {
-			t.Errorf("For labels %v, expected ingress host %q but saw %q", expectation.labels, expectedHost, ingress.Spec.Rules[0].Host)
+		if gateway.Spec.Servers[0].Hosts[0] != expectedWildcardHost {
+			t.Errorf("For labels %v, expected gateway host %q but saw %q", expectation.labels, expectedWildcardHost, gateway.Spec.Servers[0].Hosts[0])
 		}
-		if ingress.Spec.Rules[1].Host != expectedWildcardHost {
-			t.Errorf("For labels %v, expected ingress host %q but saw %q", expectation.labels, expectedWildcardHost, ingress.Spec.Rules[1].Host)
+		if gateway.Spec.Servers[0].Hosts[1] != expectedHost {
+			t.Errorf("For labels %v, expected gateway host %q but saw %q", expectation.labels, expectedHost, gateway.Spec.Servers[0].Hosts[0])
 		}
 	}
 }
@@ -1438,15 +1288,12 @@ func TestUpdateRouteWhenConfigurationChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Couldn't get route: %v", err)
 	}
-
 	// Now the configuration has a LatestReadyRevisionName, so its revision should
 	// be targeted
 	expectedTrafficTargets = []v1alpha1.TrafficTarget{{
-		RevisionName: rev.Name,
-		Percent:      100,
-	}, {
-		Name:    ctrl.GetElaK8SActivatorServiceName(),
-		Percent: 0,
+		ConfigurationName: config.Name,
+		RevisionName:      rev.Name,
+		Percent:           100,
 	}}
 	if diff := cmp.Diff(expectedTrafficTargets, route.Status.Traffic); diff != "" {
 		t.Errorf("Unexpected traffic target diff (-want +got): %v", diff)
@@ -1497,72 +1344,11 @@ func TestAddConfigurationEventNotUpdateAnythingIfHasNoLatestReady(t *testing.T) 
 	controller.SyncConfiguration(config)
 }
 
-// Test route when we do not use activator, and then use activator.
-func TestUpdateIngressEventUpdateRouteStatus(t *testing.T) {
-	kubeClient, elaClient, controller, _, elaInformer, _ := newTestController(t)
-
-	// A standalone revision
-	rev := getTestRevision("test-rev")
-	elaClient.ServingV1alpha1().Revisions(testNamespace).Create(rev)
-
-	route := getTestRouteWithTrafficTargets(
-		[]v1alpha1.TrafficTarget{{
-			RevisionName: rev.Name,
-			Percent:      100,
-		}},
-	)
-	// Create a route.
-	routeClient := elaClient.ServingV1alpha1().Routes(route.Namespace)
-	routeClient.Create(route)
-	// Since updateRouteEvent looks in the lister, we need to add it to the informer
-	elaInformer.Serving().V1alpha1().Routes().Informer().GetIndexer().Add(route)
-
-	controller.updateRouteEvent(KeyOrDie(route))
-
-	// Before ingress has an IP address, route isn't marked as Ready.
-	ingressClient := kubeClient.ExtensionsV1beta1().Ingresses(route.Namespace)
-	ingress, _ := ingressClient.Get(ctrl.GetElaK8SIngressName(route), metav1.GetOptions{})
-	controller.SyncIngress(ingress)
-
-	newRoute, _ := routeClient.Get(route.Name, metav1.GetOptions{})
-	for _, ct := range []v1alpha1.RouteConditionType{"Ready"} {
-		got := newRoute.Status.GetCondition(ct)
-		want := &v1alpha1.RouteCondition{
-			Type:               ct,
-			Status:             corev1.ConditionUnknown,
-			LastTransitionTime: got.LastTransitionTime,
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("Unexpected config conditions diff (-want +got): %v", diff)
-		}
-	}
-
-	// Update the Ingress IP.
-	ingress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{
-		IP: "127.0.0.1",
-	}}
-	controller.SyncIngress(ingress)
-
-	// Verify now that Route.Status.Conditions is set correctly.
-	newRoute, _ = routeClient.Get(route.Name, metav1.GetOptions{})
-	for _, ct := range []v1alpha1.RouteConditionType{"Ready"} {
-		got := newRoute.Status.GetCondition(ct)
-		want := &v1alpha1.RouteCondition{
-			Type:               ct,
-			Status:             corev1.ConditionTrue,
-			LastTransitionTime: got.LastTransitionTime,
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("Unexpected config conditions diff (-want +got): %v", diff)
-		}
-	}
-}
-
 func TestUpdateDomainConfigMap(t *testing.T) {
-	kubeClient, elaClient, controller, _, elaInformer, _ := newTestController(t)
+	_, elaClient, controller, _, elaInformer, _ := newTestController(t)
 	route := getTestRouteWithTrafficTargets([]v1alpha1.TrafficTarget{})
 	routeClient := elaClient.ServingV1alpha1().Routes(route.Namespace)
-	ingressClient := kubeClient.Extensions().Ingresses(route.Namespace)
+	gatewayClient := elaClient.NetworkingV1alpha3().Gateways(route.Namespace)
 
 	// Create a route.
 	elaInformer.Serving().V1alpha1().Routes().Informer().GetIndexer().Add(route)
@@ -1653,14 +1439,14 @@ func TestUpdateDomainConfigMap(t *testing.T) {
 		if route.Status.Domain != expectedDomain {
 			t.Errorf("Expected domain %q but saw %q", expectedDomain, route.Status.Domain)
 		}
-		ingress, _ := ingressClient.Get(ctrl.GetElaK8SIngressName(route), metav1.GetOptions{})
+		gateway, _ := gatewayClient.Get(ctrl.GetElaK8SGatewayName(route), metav1.GetOptions{})
 		expectedHost := route.Status.Domain
 		expectedWildcardHost := fmt.Sprintf("*.%s", route.Status.Domain)
-		if ingress.Spec.Rules[0].Host != expectedHost {
-			t.Errorf("Expected ingress host %q but saw %q", expectedHost, ingress.Spec.Rules[0].Host)
+		if gateway.Spec.Servers[0].Hosts[1] != expectedHost {
+			t.Errorf("Expected gateway host %q but saw %q", expectedHost, gateway.Spec.Servers[0].Hosts[0])
 		}
-		if ingress.Spec.Rules[1].Host != expectedWildcardHost {
-			t.Errorf("Expected ingress host %q but saw %q", expectedWildcardHost, ingress.Spec.Rules[1].Host)
+		if gateway.Spec.Servers[0].Hosts[0] != expectedWildcardHost {
+			t.Errorf("Expected gateway host %q but saw %q", expectedWildcardHost, gateway.Spec.Servers[0].Hosts[1])
 		}
 	}
 }

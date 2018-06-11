@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"go.uber.org/zap"
 
@@ -30,6 +31,9 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 )
 
+func GetServiceFullName(name string, namespace string) string {
+	return fmt.Sprintf("%s.%s.svc.cluster.local", name, namespace)
+}
 func GetDomainConfigMapName() string {
 	return "config-domain"
 }
@@ -44,7 +48,6 @@ func GetElaNamespaceName(ns string) string {
 	// TODO(mattmoor): Expose a knob for creating resources in an alternate namespace.
 	return ns
 }
-
 func GetRevisionDeploymentName(u *v1alpha1.Revision) string {
 	return u.Name + "-deployment"
 }
@@ -53,23 +56,28 @@ func GetRevisionAutoscalerName(u *v1alpha1.Revision) string {
 	return u.Name + "-autoscaler"
 }
 
-func GetRouteRuleName(u *v1alpha1.Route, tt *v1alpha1.TrafficTarget) string {
-	if tt != nil {
-		return u.Name + "-" + tt.Name + "-istio"
-	}
+func GetVirtualServiceName(u *v1alpha1.Route) string {
 	return u.Name + "-istio"
 }
 
-func GetElaK8SIngressName(u *v1alpha1.Route) string {
-	return u.Name + "-ingress"
+func GetElaK8SGatewayName(u *v1alpha1.Route) string {
+	return u.Name + "-gateway"
+}
+
+func GetElaK8SServiceNameForObj(name string) string {
+	return name + "-service"
 }
 
 func GetElaK8SServiceNameForRevision(u *v1alpha1.Revision) string {
-	return u.Name + "-service"
+	return GetElaK8SServiceNameForObj(u.Name)
 }
 
 func GetElaK8SServiceName(u *v1alpha1.Route) string {
-	return u.Name + "-service"
+	return GetElaK8SServiceNameForObj(u.Name)
+}
+
+func GetElaK8SServiceFullName(u *v1alpha1.Route) string {
+	return GetServiceFullName(GetElaK8SServiceName(u), u.Namespace)
 }
 
 func GetServiceConfigurationName(u *v1alpha1.Service) string {

@@ -228,6 +228,31 @@ func (rs *RevisionStatus) IsReady() bool {
 	return false
 }
 
+func (rs *RevisionStatus) IsInactive() bool {
+	cond := rs.GetCondition(RevisionConditionReady)
+	return (cond.Reason == "Inactive" && cond.Status == corev1.ConditionFalse) ||
+		(cond.Reason == "Activating" && cond.Status == corev1.ConditionUnknown)
+}
+
+func (rs *RevisionStatus) IsActive() bool {
+	return rs.IsReady() && !rs.IsInactive()
+}
+
+func (rs *RevisionStatus) IsRoutable() bool {
+	return rs.IsReady() || rs.IsInactive()
+}
+
+// IsFailed looks to all non-Ready conditions; if any are false, then
+// this node is in a terminal failure state.
+func (rs *RevisionStatus) IsFailed() bool {
+	for _, cond := range rs.Conditions {
+		if cond.Type != RevisionConditionReady && cond.Status == corev1.ConditionFalse {
+			return true
+		}
+	}
+	return false
+}
+
 func (rs *RevisionStatus) GetCondition(t RevisionConditionType) *RevisionCondition {
 	for _, cond := range rs.Conditions {
 		if cond.Type == t {

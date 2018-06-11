@@ -20,10 +20,11 @@ package test
 import (
 	"errors"
 	"fmt"
-	"github.com/golang/glog"
 	"io/ioutil"
 	"net/http"
 	"time"
+
+	"github.com/golang/glog"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -79,15 +80,16 @@ func WaitForEndpointState(kubeClientset *kubernetes.Clientset, resolvableDomain 
 	// (the domainSuffix) is not resolvable, we need to retrieve the IP of the endpoint and
 	// spoof the Host in our requests.
 	if !resolvableDomain {
-		ingressName := routeName + "-ingress"
-		ingress, err := kubeClientset.ExtensionsV1beta1().Ingresses(namespaceName).Get(ingressName, metav1.GetOptions{})
+		istioNamespace := "istio-system"
+		istioIngressService := "istio-ingressgateway"
+		svc, err := kubeClientset.CoreV1().Services(istioNamespace).Get(istioIngressService, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
-		if ingress.Status.LoadBalancer.Ingress[0].IP == "" {
-			return fmt.Errorf("Expected ingress loadbalancer IP for %s to be set, instead was empty", ingressName)
+		if svc.Status.LoadBalancer.Ingress[0].IP == "" {
+			return fmt.Errorf("Expected service IP for Service %q to be set, instead was empty", istioIngressService)
 		}
-		endpoint = fmt.Sprintf("http://%s", ingress.Status.LoadBalancer.Ingress[0].IP)
+		endpoint = fmt.Sprintf("http://%s", svc.Status.LoadBalancer.Ingress[0].IP)
 		spoofDomain = domain
 	} else {
 		// If the domain is resolvable, we can use it directly when we make requests

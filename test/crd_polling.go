@@ -23,10 +23,8 @@ import (
 
 	"github.com/knative/serving/pkg/apis/serving/v1alpha1"
 	elatyped "github.com/knative/serving/pkg/client/clientset/versioned/typed/serving/v1alpha1"
-	apiv1beta1 "k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
 )
 
 const (
@@ -70,18 +68,5 @@ func WaitForRevisionState(client elatyped.RevisionInterface, name string, inStat
 			return true, err
 		}
 		return inState(r)
-	})
-}
-
-// WaitForIngressState polls the status of the Ingress called name
-// from client every interval until inState returns `true` indicating it
-// is done, returns an error or timeout.
-func WaitForIngressState(client v1beta1.IngressInterface, name string, inState func(r *apiv1beta1.Ingress) (bool, error)) error {
-	return wait.PollImmediate(interval, timeout, func() (bool, error) {
-		i, err := client.Get(name, metav1.GetOptions{})
-		if err != nil {
-			return true, err
-		}
-		return inState(i)
 	})
 }

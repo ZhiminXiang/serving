@@ -123,8 +123,6 @@ function exit_if_failed() {
   kubectl get configurations -o yaml --all-namespaces
   echo ">>> Revisions:"
   kubectl get revisions -o yaml --all-namespaces
-  echo ">>> Ingress:"
-  kubectl get ingress --all-namespaces
   echo ">>> Knative Serving controller log:"
   kubectl logs $(get_ela_pod controller) -n knative-serving-system
   echo "***************************************"
@@ -164,14 +162,15 @@ function run_smoke_test() {
   kubectl apply -f ${YAML}
   local service_host=""
   local service_ip=""
-  echo -n "Waiting for Ingress to come up"
+  echo -n "Waiting for svc/istio-system/istio-ingressgateway to come up"
   for i in {1..150}; do  # timeout after 5 minutes
     service_host=$(kubectl get route route-example \
       -o jsonpath="{.status.domain}" 2>/dev/null)
-    service_ip=$(kubectl get ingress route-example-ingress \
-      -o jsonpath="{.status.loadBalancer.ingress[*]['ip']}" 2>/dev/null)
+    service_ip=$(kubectl get svc istio-ingressgateway -n istio-system \
+      -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>/dev/null)
     if [[ -n "${service_host}" && -n "${service_ip}" ]]; then
-      echo -e -n "\nIngress is at $service_ip / $service_host"
+      echo -e -n "\nIstio ingress service is at $service_ip"
+      echo -e -n "\nDomain name is $service_host"
       break
     fi
     echo -n "."

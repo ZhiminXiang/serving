@@ -28,7 +28,10 @@ import (
 )
 
 var httpServicePortName = "http"
-var servicePort = 80
+
+const (
+	ServicePort = 80
+)
 
 // MakeRevisionK8sService creates a Service that targets all pods with the same
 // serving.RevisionLabelKey label. Traffic is routed to queue-proxy port.
@@ -44,7 +47,7 @@ func MakeRevisionK8sService(u *v1alpha1.Revision, ns string) *corev1.Service {
 			Ports: []corev1.ServicePort{
 				{
 					Name:       httpServicePortName,
-					Port:       int32(servicePort),
+					Port:       int32(ServicePort),
 					TargetPort: intstr.IntOrString{Type: intstr.String, StrVal: queue.RequestQueuePortName},
 				},
 			},

@@ -72,44 +72,18 @@ func TestRouteConditions(t *testing.T) {
 	}
 }
 
-func TestTypicalFlowIngressFirst(t *testing.T) {
+func TestRouteTypicalFlow(t *testing.T) {
 	r := &Route{}
 	r.Status.InitializeConditions()
-	checkConditionOngoingRoute(r.Status, RouteConditionIngressReady, t)
-	checkConditionOngoingRoute(r.Status, RouteConditionAllTrafficAssigned, t)
-	checkConditionOngoingRoute(r.Status, RouteConditionReady, t)
-
-	r.Status.MarkIngressReady()
-	checkConditionSucceededRoute(r.Status, RouteConditionIngressReady, t)
 	checkConditionOngoingRoute(r.Status, RouteConditionAllTrafficAssigned, t)
 	checkConditionOngoingRoute(r.Status, RouteConditionReady, t)
 
 	r.Status.MarkTrafficAssigned()
-	checkConditionSucceededRoute(r.Status, RouteConditionIngressReady, t)
 	checkConditionSucceededRoute(r.Status, RouteConditionAllTrafficAssigned, t)
 	checkConditionSucceededRoute(r.Status, RouteConditionReady, t)
 
 	// Verify that this doesn't reset our conditions.
 	r.Status.InitializeConditions()
-	checkConditionSucceededRoute(r.Status, RouteConditionIngressReady, t)
-	checkConditionSucceededRoute(r.Status, RouteConditionAllTrafficAssigned, t)
-	checkConditionSucceededRoute(r.Status, RouteConditionReady, t)
-}
-
-func TestTypicalFlowIngressLast(t *testing.T) {
-	r := &Route{}
-	r.Status.InitializeConditions()
-	checkConditionOngoingRoute(r.Status, RouteConditionIngressReady, t)
-	checkConditionOngoingRoute(r.Status, RouteConditionAllTrafficAssigned, t)
-	checkConditionOngoingRoute(r.Status, RouteConditionReady, t)
-
-	r.Status.MarkTrafficAssigned()
-	checkConditionOngoingRoute(r.Status, RouteConditionIngressReady, t)
-	checkConditionSucceededRoute(r.Status, RouteConditionAllTrafficAssigned, t)
-	checkConditionOngoingRoute(r.Status, RouteConditionReady, t)
-
-	r.Status.MarkIngressReady()
-	checkConditionSucceededRoute(r.Status, RouteConditionIngressReady, t)
 	checkConditionSucceededRoute(r.Status, RouteConditionAllTrafficAssigned, t)
 	checkConditionSucceededRoute(r.Status, RouteConditionReady, t)
 }
@@ -117,17 +91,10 @@ func TestTypicalFlowIngressLast(t *testing.T) {
 func TestTrafficNotAssignedFlow(t *testing.T) {
 	r := &Route{}
 	r.Status.InitializeConditions()
-	checkConditionOngoingRoute(r.Status, RouteConditionIngressReady, t)
 	checkConditionOngoingRoute(r.Status, RouteConditionAllTrafficAssigned, t)
 	checkConditionOngoingRoute(r.Status, RouteConditionReady, t)
 
 	r.Status.MarkTrafficNotAssigned("Revision", "does-not-exist")
-	checkConditionOngoingRoute(r.Status, RouteConditionIngressReady, t)
-	checkConditionFailedRoute(r.Status, RouteConditionAllTrafficAssigned, t)
-	checkConditionFailedRoute(r.Status, RouteConditionReady, t)
-
-	r.Status.MarkIngressReady()
-	checkConditionSucceededRoute(r.Status, RouteConditionIngressReady, t)
 	checkConditionFailedRoute(r.Status, RouteConditionAllTrafficAssigned, t)
 	checkConditionFailedRoute(r.Status, RouteConditionReady, t)
 }
