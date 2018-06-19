@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+    "time"
 	"flag"
 	"fmt"
 	"log"
@@ -30,6 +31,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	if target == "" {
 		target = "NOT SPECIFIED"
 	}
+	time.Sleep(5 * time.Second)
 	fmt.Fprintf(w, "Hello World: %s!\n", target)
 }
 
