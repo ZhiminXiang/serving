@@ -10,7 +10,9 @@ spec:
     - route:
       - destination:
           host: configuration-example-00001-service.default.svc.cluster.local
-        appendHeaders:
-          x-envoy-upstream-rq-timeout-ms: "1000"
-
-
+          port:
+            number: 80
+        weight: 100
+      timeout: 1s
+      appendHeaders:
+        x-envoy-upstream-rq-timeout-ms: "0"
