@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2018 Google LLC
+# Copyright 2018 The Knative Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,9 +32,4 @@ dep ensure
 git apply --exclude='*_test.go' $SERVING_ROOT/hack/61195.patch
 
 rm -rf $(find vendor/ -name 'OWNERS')
-rm -rf $(find vendor/ -name 'BUILD')
-rm -rf $(find vendor/ -name 'BUILD.bazel')
 rm -rf $(find vendor/ -name '*_test.go')
-
-# Make sure that BUILD files are up to date (the above removes them).
-bazel run //:gazelle -- -proto=disable

@@ -1,5 +1,5 @@
 /*
-Copyright 2018 Google Inc. All Rights Reserved.
+Copyright 2018 The Knative Authors
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -26,7 +26,8 @@ import (
 )
 
 // Flags will include the k8s cluster (defaults to $K8S_CLUSTER_OVERRIDE), kubeconfig (defaults to ./kube/config)
-// (for connecting to an existing cluster), dockerRepo (defaults to $DOCKER_REPO_OVERRIDE) and how to connect to deployed endpoints.
+// (for connecting to an existing cluster), dockerRepo (defaults to $DOCKER_REPO_OVERRIDE),how to connect to deployed endpoints,
+// how to log and whether or not to emit metrics.
 var Flags = initializeFlags()
 
 // EnvironmentFlags holds the command line flags or defaults for settings in the user's environment.
@@ -35,6 +36,8 @@ type EnvironmentFlags struct {
 	DockerRepo       string
 	Kubeconfig       string
 	ResolvableDomain bool
+	LogVerbose       bool
+	EmitMetrics      bool
 }
 
 func initializeFlags() *EnvironmentFlags {
@@ -56,5 +59,18 @@ func initializeFlags() *EnvironmentFlags {
 	flag.BoolVar(&f.ResolvableDomain, "resolvabledomain", false,
 		"Set this flag to true if you have configured the `domainSuffix` on your Route controller to a domain that will resolve to your test cluster.")
 
+	flag.BoolVar(&f.LogVerbose, "logverbose", false,
+		"Set this flag to true if you would like to see verbose logging.")
+
+	flag.BoolVar(&f.EmitMetrics, "emitmetrics", false,
+		"Set this flag to true if you would like tests to emit metrics, e.g. latency of resources being realized in the system.")
+
+	flag.Parse()
+	flag.Set("alsologtostderr", "true")
+	initializeLogger(f.LogVerbose)
+
+	if f.EmitMetrics {
+		initializeMetricExporter()
+	}
 	return &f
 }

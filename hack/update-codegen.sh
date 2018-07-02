@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2018 Google LLC
+# Copyright 2018 The Knative Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,8 +27,11 @@ CODEGEN_PKG=${CODEGEN_PKG:-$(cd ${SERVING_ROOT}; ls -d -1 ./vendor/k8s.io/code-g
 #                  instead of the $GOPATH directly. For normal projects this can be dropped.
 ${CODEGEN_PKG}/generate-groups.sh "deepcopy,client,informer,lister" \
   github.com/knative/serving/pkg/client github.com/knative/serving/pkg/apis \
-  "serving:v1alpha1 istio:v1alpha2" \
+  "serving:v1alpha1 istio:v1alpha3" \
   --go-header-file ${SERVING_ROOT}/hack/boilerplate/boilerplate.go.txt
+
+# Update code to change Gatewaies -> Gateways to workaround cleverness of codegen pluralizer.
+find -name '*.go' -exec grep -l atewaies {} \; | xargs sed 's/atewaies/ateways/g' -i
 
 # Make sure our dependencies are up-to-date
 ${SERVING_ROOT}/hack/update-deps.sh

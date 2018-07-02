@@ -1,5 +1,5 @@
 /*
-Copyright 2018 Google LLC. All Rights Reserved.
+Copyright 2018 The Knative Authors.
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/knative/serving/pkg/apis/serving/v1alpha1"
+	. "github.com/knative/serving/pkg/logging/testing"
 	"github.com/mattbaird/jsonpatch"
 )
 
@@ -26,7 +27,7 @@ func TestEmptySpec(t *testing.T) {
 	s := v1alpha1.Service{
 		Spec: v1alpha1.ServiceSpec{},
 	}
-	err := ValidateService(testCtx)(nil, &s, &s)
+	err := ValidateService(TestContextWithLogger(t))(nil, &s, &s)
 	if err == nil {
 		t.Errorf("Expected failure, but succeeded with: %+v", s)
 	}
@@ -43,7 +44,7 @@ func TestRunLatest(t *testing.T) {
 			},
 		},
 	}
-	if err := ValidateService(testCtx)(nil, &s, &s); err != nil {
+	if err := ValidateService(TestContextWithLogger(t))(nil, &s, &s); err != nil {
 		t.Errorf("Expected success, but failed with: %s", err)
 	}
 }
@@ -54,7 +55,7 @@ func TestRunLatestWithMissingConfiguration(t *testing.T) {
 			RunLatest: &v1alpha1.RunLatestType{},
 		},
 	}
-	err := ValidateService(testCtx)(nil, &s, &s)
+	err := ValidateService(TestContextWithLogger(t))(nil, &s, &s)
 	if err == nil {
 		t.Errorf("Expected failure, but succeeded with: %+v", s)
 	}
@@ -74,7 +75,7 @@ func TestPinned(t *testing.T) {
 		},
 	}
 
-	if err := ValidateService(testCtx)(nil, &s, &s); err != nil {
+	if err := ValidateService(TestContextWithLogger(t))(nil, &s, &s); err != nil {
 		t.Errorf("Expected success, but failed with: %s", err)
 	}
 }
@@ -87,7 +88,7 @@ func TestPinnedFailsWithNoRevisionName(t *testing.T) {
 			},
 		},
 	}
-	err := ValidateService(testCtx)(nil, &s, &s)
+	err := ValidateService(TestContextWithLogger(t))(nil, &s, &s)
 	if err == nil {
 		t.Errorf("Expected failure, but succeeded with: %+v", s)
 	}
@@ -104,7 +105,7 @@ func TestPinnedFailsWithNoConfiguration(t *testing.T) {
 			},
 		},
 	}
-	err := ValidateService(testCtx)(nil, &s, &s)
+	err := ValidateService(TestContextWithLogger(t))(nil, &s, &s)
 	if err == nil {
 		t.Errorf("Expected failure, but succeeded with: %+v", s)
 	}
@@ -126,7 +127,7 @@ func TestPinnedSetsDefaults(t *testing.T) {
 	s.Spec.Pinned.Configuration.RevisionTemplate.Spec.ConcurrencyModel = ""
 
 	var patches []jsonpatch.JsonPatchOperation
-	if err := SetServiceDefaults(testCtx)(&patches, &s); err != nil {
+	if err := SetServiceDefaults(TestContextWithLogger(t))(&patches, &s); err != nil {
 		t.Errorf("Expected success, but failed with: %s", err)
 	}
 
@@ -156,7 +157,7 @@ func TestLatestSetsDefaults(t *testing.T) {
 	s.Spec.RunLatest.Configuration.RevisionTemplate.Spec.ConcurrencyModel = ""
 
 	var patches []jsonpatch.JsonPatchOperation
-	if err := SetServiceDefaults(testCtx)(&patches, &s); err != nil {
+	if err := SetServiceDefaults(TestContextWithLogger(t))(&patches, &s); err != nil {
 		t.Errorf("Expected success, but failed with: %s", err)
 	}
 

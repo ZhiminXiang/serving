@@ -1,5 +1,9 @@
 /*
+<<<<<<< HEAD
 Copyright 2018 Google LLC
+=======
+Copyright 2018 The Knative Authors
+>>>>>>> e74cf2354149f5599d17e6e2c2290fb7e90d9716
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

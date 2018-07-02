@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Google Inc. All Rights Reserved.
+Copyright 2017 The Knative Authors
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -17,9 +17,12 @@ package main
 
 import (
 	"flag"
+	"log"
 
 	"go.uber.org/zap"
 
+	"github.com/knative/serving/pkg"
+	"github.com/knative/serving/pkg/configmap"
 	"github.com/knative/serving/pkg/logging"
 	"github.com/knative/serving/pkg/signals"
 	"github.com/knative/serving/pkg/webhook"
@@ -30,7 +33,11 @@ import (
 
 func main() {
 	flag.Parse()
-	logger := logging.NewLoggerFromDefaultConfigMap("loglevel.webhook").Named("ela-webhook")
+	config, err := configmap.Load("/etc/config-logging")
+	if err != nil {
+		log.Fatalf("Error loading logging configuration: %v", err)
+	}
+	logger := logging.NewLoggerFromConfig(logging.NewConfigFromMap(config), "webhook")
 	defer logger.Sync()
 
 	logger.Info("Starting the Configuration Webhook")
@@ -49,10 +56,10 @@ func main() {
 	}
 
 	options := webhook.ControllerOptions{
-		ServiceName:      "ela-webhook",
-		ServiceNamespace: "knative-serving-system",
+		ServiceName:      "webhook",
+		ServiceNamespace: pkg.GetServingSystemNamespace(),
 		Port:             443,
-		SecretName:       "ela-webhook-certs",
+		SecretName:       "webhook-certs",
 		WebhookName:      "webhook.knative.dev",
 	}
 	controller, err := webhook.NewAdmissionController(clientset, options, logger)
