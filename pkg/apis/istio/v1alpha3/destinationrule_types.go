@@ -265,7 +265,7 @@ type LoadBalancerSettings struct {
 // Standard load balancing algorithms that require no tuning.
 type SimpleLB string
 
-const {
+const (
 	  // Round Robin policy. Default
 	  SimpleLBRoundRobin SimpleLB = "ROUND_ROBIN"
 
@@ -285,7 +285,7 @@ const {
     // advanced use cases. Refer to Original Destination load balancer in
     // Envoy for further details.
     SimpleLBPassthrough SimpleLB = "PASSTHROUGH"
-}
+)
 
 // Consistent Hash-based load balancing can be used to provide soft
 // session affinity based on HTTP headers, cookies or other
@@ -523,7 +523,7 @@ type TLSSettings struct {
 // TLS connection mode
 type TLSmode string
 
-const {
+const (
 
     // Do not setup a TLS connection to the upstream endpoint.
     TLSmodeDisable TLSmode = "DISABLE"
@@ -541,4 +541,4 @@ const {
     // automatically by Istio for mTLS authentication. When this mode is
     // used, all other fields in `TLSSettings` should be empty.
     TLSmodeIstioMutual TLSmode = "ISTIO_MUTUAL"
-}
+)
