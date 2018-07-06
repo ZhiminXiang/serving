@@ -45,11 +45,14 @@ type Listers struct {
 	Configuration *ConfigurationLister
 	Revision      *RevisionLister
 
+	VirtualService *VirtualServiceLister
+
 	Build *BuildLister
 
 	Deployment *DeploymentLister
 	K8sService *K8sServiceLister
 	Endpoints  *EndpointsLister
+	ConfigMap  *ConfigMapLister
 }
 
 func (f *Listers) GetServiceLister() *ServiceLister {
@@ -57,6 +60,13 @@ func (f *Listers) GetServiceLister() *ServiceLister {
 		return &ServiceLister{}
 	}
 	return f.Service
+}
+
+func (f *Listers) GetVirtualServiceLister() *VirtualServiceLister {
+	if f.VirtualService == nil {
+		return &VirtualServiceLister{}
+	}
+	return f.VirtualService
 }
 
 func (f *Listers) GetRouteLister() *RouteLister {
@@ -108,6 +118,13 @@ func (f *Listers) GetEndpointsLister() *EndpointsLister {
 	return f.Endpoints
 }
 
+func (f *Listers) GetConfigMapLister() *ConfigMapLister {
+	if f.ConfigMap == nil {
+		return &ConfigMapLister{}
+	}
+	return f.ConfigMap
+}
+
 func (f *Listers) GetKubeObjects() []runtime.Object {
 	var kubeObjs []runtime.Object
 	for _, r := range f.GetDeploymentLister().Items {
@@ -117,6 +134,9 @@ func (f *Listers) GetKubeObjects() []runtime.Object {
 		kubeObjs = append(kubeObjs, r)
 	}
 	for _, r := range f.GetEndpointsLister().Items {
+		kubeObjs = append(kubeObjs, r)
+	}
+	for _, r := range f.GetConfigMapLister().Items {
 		kubeObjs = append(kubeObjs, r)
 	}
 	return kubeObjs
@@ -142,6 +162,9 @@ func (f *Listers) GetServingObjects() []runtime.Object {
 		objs = append(objs, r)
 	}
 	for _, r := range f.GetRevisionLister().Items {
+		objs = append(objs, r)
+	}
+	for _, r := range f.GetVirtualServiceLister().Items {
 		objs = append(objs, r)
 	}
 	return objs
@@ -173,6 +196,10 @@ type TableRow struct {
 
 	// WantQueue is the set of keys we expect to be in the workqueue following reconciliation.
 	WantQueue []string
+
+	// WithReactors is a set of functions that are installed as Reactors for the execution
+	// of this row of the table-driven-test.
+	WithReactors []clientgotesting.ReactionFunc
 }
 
 type Ctor func(*Listers, controller.Options) controller.Interface
@@ -188,6 +215,12 @@ func (r *TableRow) Test(t *testing.T, ctor Ctor) {
 		ServingClientSet: client,
 		Logger:           TestLogger(t),
 	})
+
+	for _, reactor := range r.WithReactors {
+		kubeClient.PrependReactor("*", "*", reactor)
+		client.PrependReactor("*", "*", reactor)
+		buildClient.PrependReactor("*", "*", reactor)
+	}
 
 	// Run the Reconcile we're testing.
 	if err := c.Reconcile(r.Key); (err != nil) != r.WantErr {
@@ -214,7 +247,7 @@ func (r *TableRow) Test(t *testing.T, ctor Ctor) {
 			t.Errorf("unexpected action[%d]: %#v", i, got)
 		}
 		obj := got.GetObject()
-		if diff := cmp.Diff(want, obj, ignoreLastTransitionTime, safeDeployDiff); diff != "" {
+		if diff := cmp.Diff(want, obj, ignoreLastTransitionTime, safeDeployDiff, cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("unexpected create (-want +got): %s", diff)
 		}
 	}
@@ -230,7 +263,7 @@ func (r *TableRow) Test(t *testing.T, ctor Ctor) {
 			continue
 		}
 		got := updateActions[i]
-		if diff := cmp.Diff(want.GetObject(), got.GetObject(), ignoreLastTransitionTime, safeDeployDiff); diff != "" {
+		if diff := cmp.Diff(want.GetObject(), got.GetObject(), ignoreLastTransitionTime, safeDeployDiff, cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("unexpected update (-want +got): %s", diff)
 		}
 	}

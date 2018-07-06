@@ -110,10 +110,9 @@ func NewController(
 	return c
 }
 
-// Run will set up the event handlers for types we are interested in, as well
-// as syncing informer caches and starting workers. It will block until stopCh
-// is closed, at which point it will shutdown the workqueue and wait for
-// workers to finish processing their current work items.
+// Run starts the controller's worker threads, the number of which is threadiness. It then blocks until stopCh
+// is closed, at which point it shuts down its internal work queue and waits for workers to finish processing their
+// current work items.
 func (c *Controller) Run(threadiness int, stopCh <-chan struct{}) error {
 	return c.RunController(threadiness, stopCh, c.Reconcile, "Route")
 }
@@ -157,6 +156,9 @@ func (c *Controller) Reconcile(key string) error {
 		// cache may be stale and we don't want to overwrite a prior update
 		// to status with this stale state.
 	} else if _, err := c.updateStatus(ctx, route); err != nil {
+		logger.Warn("Failed to update route status", zap.Error(err))
+		c.Recorder.Eventf(route, corev1.EventTypeWarning, "UpdateFailed",
+			"Failed to update status for route %q: %v", route.Name, err)
 		return err
 	}
 	return err
@@ -228,7 +230,7 @@ func (c *Controller) EnqueueReferringRoute(obj interface{}) {
 	// Check whether is configuration is referred by a route.
 	routeName, ok := config.Labels[serving.RouteLabelKey]
 	if !ok {
-		c.Logger.Infof("Configuration %s does not have a referrring route", config.Name)
+		c.Logger.Infof("Configuration %s does not have a referring route", config.Name)
 		return
 	}
 	// Configuration is referred by a Route.  Update such Route.

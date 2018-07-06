@@ -21,65 +21,74 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	buildv1alpha1 "github.com/knative/build/pkg/apis/build/v1alpha1"
 	"github.com/knative/serving/pkg/apis/serving/v1alpha1"
 )
 
 func TestNamer(t *testing.T) {
 	tests := []struct {
-		name string
-		rev  *v1alpha1.Revision
-		f    func(*v1alpha1.Revision) string
-		want string
+		name          string
+		configuration *v1alpha1.Configuration
+		f             func(*v1alpha1.Configuration) string
+		want          string
 	}{{
-		name: "Deployment",
-		rev: &v1alpha1.Revision{
+		name: "Revision(42)",
+		configuration: &v1alpha1.Configuration{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
+				Name:      "foo",
+				Namespace: "default",
+			},
+			Spec: v1alpha1.ConfigurationSpec{
+				Generation: 42,
 			},
 		},
-		f:    Deployment,
-		want: "foo-deployment",
+		f:    Revision,
+		want: "foo-00042",
 	}, {
-		name: "Autoscaler",
-		rev: &v1alpha1.Revision{
+		name: "Revision(31)",
+		configuration: &v1alpha1.Configuration{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "bar",
+				Name:      "bar",
+				Namespace: "default",
+			},
+			Spec: v1alpha1.ConfigurationSpec{
+				Generation: 31,
 			},
 		},
-		f:    Autoscaler,
-		want: "bar-autoscaler",
+		f:    Revision,
+		want: "bar-00031",
 	}, {
-		name: "VPA",
-		rev: &v1alpha1.Revision{
+		name: "Build(no build)",
+		configuration: &v1alpha1.Configuration{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "baz",
+				Name:      "baz",
+				Namespace: "default",
+			},
+			Spec: v1alpha1.ConfigurationSpec{
+				Generation: 16,
 			},
 		},
-		f:    VPA,
-		want: "baz-vpa",
+		f:    Build,
+		want: "",
 	}, {
-		name: "K8sService",
-		rev: &v1alpha1.Revision{
+		name: "Build(999, with build)",
+		configuration: &v1alpha1.Configuration{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "blah",
+				Name:      "blah",
+				Namespace: "default",
+			},
+			Spec: v1alpha1.ConfigurationSpec{
+				Generation: 999,
+				Build:      &buildv1alpha1.BuildSpec{},
 			},
 		},
-		f:    K8sService,
-		want: "blah-service",
-	}, {
-		name: "FluentdConfigMap",
-		rev: &v1alpha1.Revision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "bazinga",
-			},
-		},
-		f:    FluentdConfigMap,
-		want: "bazinga-fluentd",
+		f:    Build,
+		want: "blah-00999",
 	}}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := test.f(test.rev)
+			got := test.f(test.configuration)
 			if got != test.want {
 				t.Errorf("%s() = %v, wanted %v", test.name, got, test.want)
 			}

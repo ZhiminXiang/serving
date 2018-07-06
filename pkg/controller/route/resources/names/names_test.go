@@ -26,60 +26,45 @@ import (
 
 func TestNamer(t *testing.T) {
 	tests := []struct {
-		name string
-		rev  *v1alpha1.Revision
-		f    func(*v1alpha1.Revision) string
-		want string
+		name  string
+		route *v1alpha1.Route
+		f     func(*v1alpha1.Route) string
+		want  string
 	}{{
-		name: "Deployment",
-		rev: &v1alpha1.Revision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-		},
-		f:    Deployment,
-		want: "foo-deployment",
-	}, {
-		name: "Autoscaler",
-		rev: &v1alpha1.Revision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "bar",
-			},
-		},
-		f:    Autoscaler,
-		want: "bar-autoscaler",
-	}, {
-		name: "VPA",
-		rev: &v1alpha1.Revision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "baz",
-			},
-		},
-		f:    VPA,
-		want: "baz-vpa",
-	}, {
 		name: "K8sService",
-		rev: &v1alpha1.Revision{
+		route: &v1alpha1.Route{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "blah",
+				Name:      "blah",
+				Namespace: "default",
 			},
 		},
 		f:    K8sService,
 		want: "blah-service",
 	}, {
-		name: "FluentdConfigMap",
-		rev: &v1alpha1.Revision{
+		name: "VirtualService",
+		route: &v1alpha1.Route{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "bazinga",
+				Name:      "foo",
+				Namespace: "default",
 			},
 		},
-		f:    FluentdConfigMap,
-		want: "bazinga-fluentd",
+		f:    VirtualService,
+		want: "foo-istio",
+	}, {
+		name: "K8sServiceFullname",
+		route: &v1alpha1.Route{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "bar",
+				Namespace: "default",
+			},
+		},
+		f:    K8sServiceFullname,
+		want: "bar-service.default.svc.cluster.local",
 	}}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := test.f(test.rev)
+			got := test.f(test.route)
 			if got != test.want {
 				t.Errorf("%s() = %v, wanted %v", test.name, got, test.want)
 			}

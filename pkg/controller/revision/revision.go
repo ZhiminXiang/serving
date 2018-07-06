@@ -102,6 +102,7 @@ type Controller struct {
 	deploymentLister appsv1listers.DeploymentLister
 	serviceLister    corev1listers.ServiceLister
 	endpointsLister  corev1listers.EndpointsLister
+	configMapLister  corev1listers.ConfigMapLister
 
 	buildtracker *buildTracker
 
@@ -149,6 +150,7 @@ func NewController(
 	deploymentInformer appsv1informers.DeploymentInformer,
 	serviceInformer corev1informers.ServiceInformer,
 	endpointsInformer corev1informers.EndpointsInformer,
+	configMapInformer corev1informers.ConfigMapInformer,
 	vpaInformer vpav1alpha1informers.VerticalPodAutoscalerInformer,
 	controllerConfig *config.Controller,
 ) *Controller {
@@ -161,6 +163,7 @@ func NewController(
 		deploymentLister: deploymentInformer.Lister(),
 		serviceLister:    serviceInformer.Lister(),
 		endpointsLister:  endpointsInformer.Lister(),
+		configMapLister:  configMapInformer.Lister(),
 		buildtracker:     &buildTracker{builds: map[key]set{}},
 		resolver: &digestResolver{
 			client:           opt.KubeClientSet,
@@ -196,6 +199,14 @@ func NewController(
 		},
 	})
 
+	configMapInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
+		FilterFunc: controller.Filter("Revision"),
+		Handler: cache.ResourceEventHandlerFuncs{
+			AddFunc:    c.EnqueueControllerOf,
+			UpdateFunc: controller.PassNew(c.EnqueueControllerOf),
+		},
+	})
+
 	opt.ConfigMapWatcher.Watch(config.NetworkConfigName, c.receiveNetworkConfig)
 	opt.ConfigMapWatcher.Watch(logging.ConfigName, c.receiveLoggingConfig)
 	opt.ConfigMapWatcher.Watch(config.ObservabilityConfigName, c.receiveObservabilityConfig)
@@ -204,10 +215,9 @@ func NewController(
 	return c
 }
 
-// Run will set up the event handlers for types we are interested in, as well
-// as syncing informer caches and starting workers. It will block until stopCh
-// is closed, at which point it will shutdown the workqueue and wait for
-// workers to finish processing their current work items.
+// Run starts the controller's worker threads, the number of which is threadiness. It then blocks until stopCh
+// is closed, at which point it shuts down its internal work queue and waits for workers to finish processing their
+// current work items.
 func (c *Controller) Run(threadiness int, stopCh <-chan struct{}) error {
 	return c.RunController(threadiness, stopCh, c.Reconcile, "Revision")
 }
@@ -366,7 +376,7 @@ func (c *Controller) EnqueueEndpointsRevision(obj interface{}) {
 }
 
 func (c *Controller) reconcileDeployment(ctx context.Context, rev *v1alpha1.Revision) error {
-	ns := controller.GetServingNamespaceName(rev.Namespace)
+	ns := rev.Namespace
 	deploymentName := resourcenames.Deployment(rev)
 	logger := logging.FromContext(ctx).With(zap.String(logkey.Deployment, deploymentName))
 
@@ -494,7 +504,7 @@ func (c *Controller) deleteDeployment(ctx context.Context, deployment *appsv1.De
 }
 
 func (c *Controller) reconcileService(ctx context.Context, rev *v1alpha1.Revision) error {
-	ns := controller.GetServingNamespaceName(rev.Namespace)
+	ns := rev.Namespace
 	serviceName := resourcenames.K8sService(rev)
 	logger := logging.FromContext(ctx).With(zap.String(logkey.KubernetesService, serviceName))
 
@@ -637,59 +647,35 @@ func (c *Controller) reconcileFluentdConfigMap(ctx context.Context, rev *v1alpha
 		return nil
 	}
 	ns := rev.Namespace
+	name := resourcenames.FluentdConfigMap(rev)
 
-	// One ConfigMap for Fluentd sidecar per namespace. It has multiple owner
-	// references. Cannot set BlockOwnerDeletion nor Controller to true.
-
-	// Our informer is restricted to our controller's namespace, so we don't
-	// go through its ConfigMapLister.
-	configMap, err := c.KubeClientSet.CoreV1().ConfigMaps(ns).Get(fluentdConfigMapName, metav1.GetOptions{})
+	configMap, err := c.configMapLister.ConfigMaps(ns).Get(name)
 	if apierrs.IsNotFound(err) {
 		// ConfigMap doesn't exist, going to create it
-		configMap = MakeFluentdConfigMap(ns, c.getObservabilityConfig().FluentdSidecarOutputConfig)
-		configMap.OwnerReferences = append(configMap.OwnerReferences, *newRevisionNonControllerRef(rev))
-		logger.Infof("Creating configmap: %q", configMap.Name)
-		_, err = c.KubeClientSet.CoreV1().ConfigMaps(ns).Create(configMap)
-		return err
+		desiredConfigMap := resources.MakeFluentdConfigMap(rev, c.getObservabilityConfig())
+		configMap, err = c.KubeClientSet.CoreV1().ConfigMaps(ns).Create(desiredConfigMap)
+		if err != nil {
+			logger.Error("Error creating fluentd configmap", zap.Error(err))
+			return err
+		}
+		logger.Infof("Created fluentd configmap: %q", name)
 	} else if err != nil {
-		logger.Errorf("configmaps.Get for %q failed: %s", fluentdConfigMapName, err)
+		logger.Errorf("configmaps.Get for %q failed: %s", name, err)
 		return err
-	}
-
-	// ConfigMap exists, make sure it has the right content.
-	desiredConfigMap := configMap.DeepCopy()
-	desiredConfigMap.Data = map[string]string{
-		"varlog.conf": makeFullFluentdConfig(c.getObservabilityConfig().FluentdSidecarOutputConfig),
-	}
-	addOwnerReference(desiredConfigMap, newRevisionNonControllerRef(rev))
-	if !reflect.DeepEqual(desiredConfigMap, configMap) {
-		logger.Infof("Updating configmap: %q", desiredConfigMap.Name)
-		_, err := c.KubeClientSet.CoreV1().ConfigMaps(ns).Update(desiredConfigMap)
-		return err
-	}
-	return nil
-}
-
-func newRevisionNonControllerRef(rev *v1alpha1.Revision) *metav1.OwnerReference {
-	blockOwnerDeletion := false
-	isController := false
-	revRef := controller.NewControllerRef(rev)
-	revRef.BlockOwnerDeletion = &blockOwnerDeletion
-	revRef.Controller = &isController
-	return revRef
-}
-
-func addOwnerReference(configMap *corev1.ConfigMap, ownerReference *metav1.OwnerReference) {
-	isOwner := false
-	for _, existingOwner := range configMap.OwnerReferences {
-		if ownerReference.Name == existingOwner.Name {
-			isOwner = true
-			break
+	} else {
+		desiredConfigMap := resources.MakeFluentdConfigMap(rev, c.getObservabilityConfig())
+		if !equality.Semantic.DeepEqual(configMap.Data, desiredConfigMap.Data) {
+			logger.Infof("Reconciling fluentd configmap diff (-desired, +observed): %v",
+				cmp.Diff(desiredConfigMap.Data, configMap.Data))
+			configMap.Data = desiredConfigMap.Data
+			configMap, err = c.KubeClientSet.CoreV1().ConfigMaps(ns).Update(desiredConfigMap)
+			if err != nil {
+				logger.Error("Error updating fluentd configmap", zap.Error(err))
+				return err
+			}
 		}
 	}
-	if !isOwner {
-		configMap.OwnerReferences = append(configMap.OwnerReferences, *ownerReference)
-	}
+	return nil
 }
 
 func (c *Controller) reconcileAutoscalerService(ctx context.Context, rev *v1alpha1.Revision) error {
@@ -831,7 +817,7 @@ func (c *Controller) reconcileVPA(ctx context.Context, rev *v1alpha1.Revision) e
 		return nil
 	}
 
-	ns := controller.GetServingNamespaceName(rev.Namespace)
+	ns := rev.Namespace
 	vpaName := resourcenames.VPA(rev)
 
 	// TODO(mattmoor): Switch to informer lister once it can reliably be sunk.

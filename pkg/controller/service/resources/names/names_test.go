@@ -26,60 +26,35 @@ import (
 
 func TestNamer(t *testing.T) {
 	tests := []struct {
-		name string
-		rev  *v1alpha1.Revision
-		f    func(*v1alpha1.Revision) string
-		want string
+		name    string
+		service *v1alpha1.Service
+		f       func(*v1alpha1.Service) string
+		want    string
 	}{{
-		name: "Deployment",
-		rev: &v1alpha1.Revision{
+		name: "Configuration",
+		service: &v1alpha1.Service{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
+				Name:      "foo",
+				Namespace: "default",
 			},
 		},
-		f:    Deployment,
-		want: "foo-deployment",
+		f:    Configuration,
+		want: "foo",
 	}, {
-		name: "Autoscaler",
-		rev: &v1alpha1.Revision{
+		name: "Route",
+		service: &v1alpha1.Service{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "bar",
+				Name:      "bar",
+				Namespace: "default",
 			},
 		},
-		f:    Autoscaler,
-		want: "bar-autoscaler",
-	}, {
-		name: "VPA",
-		rev: &v1alpha1.Revision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "baz",
-			},
-		},
-		f:    VPA,
-		want: "baz-vpa",
-	}, {
-		name: "K8sService",
-		rev: &v1alpha1.Revision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "blah",
-			},
-		},
-		f:    K8sService,
-		want: "blah-service",
-	}, {
-		name: "FluentdConfigMap",
-		rev: &v1alpha1.Revision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "bazinga",
-			},
-		},
-		f:    FluentdConfigMap,
-		want: "bazinga-fluentd",
+		f:    Route,
+		want: "bar",
 	}}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := test.f(test.rev)
+			got := test.f(test.service)
 			if got != test.want {
 				t.Errorf("%s() = %v, wanted %v", test.name, got, test.want)
 			}
