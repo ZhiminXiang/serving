@@ -43,6 +43,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: knative-ingressgateway
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: "*.zhiminx.business."
   namespace: istio-system
   labels:
     chart: ingressgateway-0.8.0
